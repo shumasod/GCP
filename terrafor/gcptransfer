@@ -1,0 +1,43 @@
+resource "google_storage_transfer_job" "gcs_to_gcs_transfer" {
+  description = "Transfer data from one GCS bucket to another"
+  project     = "your-project-id"
+
+  transfer_spec {
+    object_conditions {
+      max_time_elapsed_since_last_modification = "600s" # 転送対象のオブジェクトの最終更新から10分以内のものを転送
+    }
+    transfer_options {
+      delete_object_unique_in_sink = false # 転送先のバケットにあるオブジェクトは残す
+    }
+    source_specs {
+      object_conditions {
+        excluded_prefixes = ["example/"] # 除外するプレフィックス
+      }
+      source {
+        bucket = "your-source-bucket"
+      }
+    }
+    sink_specs {
+      sink {
+        bucket = "your-sink-bucket"
+      }
+    }
+  }
+  schedule {
+    schedule_start_date {
+      year  = 2023
+      month = 5
+      day   = 1
+    }
+    schedule_end_date {
+      year  = 2025
+      month = 1 
+      day   = 1
+    }
+    start_time_of_day {
+      hours   = 1
+      minutes = 0
+      nanos   = 0
+    }
+  }
+}
