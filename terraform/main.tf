@@ -1,16 +1,19 @@
+# Configure the Google Cloud provider
 provider "google" {
-  project = "YOUR_PROJECT_ID"
+  project = "your-project-id"
   region  = "us-central1"
+  zone    = "us-central1-c"
 }
 
+# Create a Google Compute Engine instance
 resource "google_compute_instance" "default" {
-  name         = "example-instance"
-  machine_type = "e2-medium"
-  zone         = "us-central1-a"
+  name         = "terraform-instance"
+  machine_type = "e2-micro"
+  zone         = "us-central1-c"
 
   boot_disk {
     initialize_params {
-      image = "debian-cloud/debian-10"
+      image = "debian-cloud/debian-11"
     }
   }
 
@@ -18,11 +21,34 @@ resource "google_compute_instance" "default" {
     network = "default"
 
     access_config {
-      // Ephemeral IP
+      // Ephemeral public IP
     }
   }
 
-  metadata = {
-    ssh-keys = "your-username:${file("~/.ssh/id_rsa.pub")}"
+  metadata_startup_script = "echo hi > /test.txt"
+
+  tags = ["foo", "bar"]
+}
+
+# Create a new network
+resource "google_compute_network" "vpc_network" {
+  name                    = "terraform-network"
+  auto_create_subnetworks = "true"
+}
+
+# Create a firewall rule
+resource "google_compute_firewall" "default" {
+  name    = "terraform-firewall"
+  network = google_compute_network.vpc_network.name
+
+  allow {
+    protocol = "icmp"
   }
+
+  allow {
+    protocol = "tcp"
+    ports    = ["22", "80", "443"]
+  }
+
+  source_ranges = ["0.0.0.0/0"]
 }
