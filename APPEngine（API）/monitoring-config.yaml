@@ -1,0 +1,54 @@
+# monitoring-config.yaml
+apiVersion: monitoring.googleapis.com/v1
+kind: MonitoringConfig
+metadata:
+  name: app-monitoring
+spec:
+  logging:
+    logMetrics:
+      - name: error_count
+        filter: 'severity >= ERROR'
+        metricDescriptor:
+          type: logging.googleapis.com/user/error_count
+          metricKind: DELTA
+          valueType: INT64
+          unit: "1"
+          description: "Count of error logs"
+    
+  metrics:
+    customMetrics:
+      - name: api_latency
+        type: api_latency
+        metricKind: GAUGE
+        valueType: DOUBLE
+        unit: ms
+        description: "API response latency"
+        
+  dashboards:
+    - name: "Application Overview"
+      tiles:
+        - title: "Error Rate"
+          timeSeriesQuery:
+            filter: "metric.type = \"logging.googleapis.com/user/error_count\""
+            aggregation:
+              alignmentPeriod: 60s
+              crossSeriesReducer: REDUCE_SUM
+              perSeriesAligner: ALIGN_RATE
+              
+  alertPolicies:
+    - displayName: "High Latency Alert"
+      conditions:
+        - displayName: "Latency Above Threshold"
+          conditionThreshold:
+            filter: "metric.type = \"custom.googleapis.com/api_latency\""
+            aggregations:
+              - alignmentPeriod: 60s
+                perSeriesAligner: ALIGN_PERCENTILE_99
+            comparison: COMPARISON_GT
+            thresholdValue: 1000
+            duration: 300s
+      combiner: OR
+      notificationChannels:
+        - type: "email"
+          labels:
+            email_address: "${ALERT_EMAIL}"
