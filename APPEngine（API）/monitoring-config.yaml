@@ -1,20 +1,42 @@
-# monitoring-config.yaml
 apiVersion: monitoring.googleapis.com/v1
 kind: MonitoringConfig
 metadata:
   name: app-monitoring
+  labels:
+    environment: production
+    team: platform
+    service: api-service
+    version: "1.0"
 spec:
+  # ログベースのメトリクス定義
   logging:
     logMetrics:
       - name: error_count
-        filter: 'severity >= ERROR'
+        filter: 'severity >= ERROR AND resource.type = "k8s_container" AND resource.labels.container_name = "api-server"'
         metricDescriptor:
           type: logging.googleapis.com/user/error_count
           metricKind: DELTA
           valueType: INT64
           unit: "1"
-          description: "Count of error logs"
+          description: "Count of error logs from API server"
+          labels:
+            - key: severity
+              valueType: STRING
+              description: "Error severity level"
+            - key: error_type
+              valueType: STRING
+              description: "Type of error encountered"
+        
+      - name: warning_count
+        filter: 'severity = WARNING AND resource.type = "k8s_container"'
+        metricDescriptor:
+          type: logging.googleapis.com/user/warning_count
+          metricKind: DELTA
+          valueType: INT64
+          unit: "1"
+          description: "Count of warning logs"
     
+  # カスタムメトリクス定義
   metrics:
     customMetrics:
       - name: api_latency
@@ -22,33 +44,229 @@ spec:
         metricKind: GAUGE
         valueType: DOUBLE
         unit: ms
-        description: "API response latency"
+        description: "API response latency by endpoint and status code"
+        labels:
+          - key: endpoint
+            valueType: STRING
+            description: "API endpoint path"
+          - key: status_code
+            valueType: INT64
+            description: "HTTP status code"
+          - key: method
+            valueType: STRING
+            description: "HTTP method (GET, POST, etc.)"
+      
+      - name: request_count
+        type: request_count
+        metricKind: DELTA
+        valueType: INT64
+        unit: "1"
+        description: "Count of API requests"
+        labels:
+          - key: endpoint
+            valueType: STRING
+            description: "API endpoint path"
+          - key: status_code
+            valueType: INT64
+            description: "HTTP status code"
+          - key: method
+            valueType: STRING
+            description: "HTTP method"
+      
+      - name: active_users
+        type: active_users
+        metricKind: GAUGE
+        valueType: INT64
+        unit: "1"
+        description: "Number of active users"
         
+  # ダッシュボード定義
   dashboards:
     - name: "Application Overview"
+      layout: GRID
+      gridLayout:
+        columns: 2
       tiles:
-        - title: "Error Rate"
+        - title: "Error Rate (per minute)"
+          width: 1
+          height: 1
           timeSeriesQuery:
             filter: "metric.type = \"logging.googleapis.com/user/error_count\""
             aggregation:
               alignmentPeriod: 60s
               crossSeriesReducer: REDUCE_SUM
               perSeriesAligner: ALIGN_RATE
+              groupByFields:
+                - "resource.labels.container_name"
+        
+        - title: "API Latency (p99)"
+          width: 1
+          height: 1
+          timeSeriesQuery:
+            filter: "metric.type = \"custom.googleapis.com/api_latency\""
+            aggregation:
+              alignmentPeriod: 60s
+              perSeriesAligner: ALIGN_PERCENTILE_99
+              groupByFields:
+                - "metric.labels.endpoint"
+                - "metric.labels.method"
+        
+        - title: "Request Volume by Endpoint"
+          width: 2
+          height: 1
+          timeSeriesQuery:
+            filter: "metric.type = \"custom.googleapis.com/request_count\""
+            aggregation:
+              alignmentPeriod: 60s
+              crossSeriesReducer: REDUCE_SUM
+              perSeriesAligner: ALIGN_RATE
+              groupByFields:
+                - "metric.labels.endpoint"
+        
+        - title: "Error Distribution by Type"
+          width: 1
+          height: 1
+          pieChart:
+            chartOptions:
+              mode: COLOR
+            dataSets:
+              - timeSeriesQuery:
+                  filter: "metric.type = \"logging.googleapis.com/user/error_count\""
+                  aggregation:
+                    alignmentPeriod: 3600s
+                    crossSeriesReducer: REDUCE_SUM
+                    groupByFields:
+                      - "metric.labels.error_type"
+        
+        - title: "Active Users"
+          width: 1
+          height: 1
+          timeSeriesQuery:
+            filter: "metric.type = \"custom.googleapis.com/active_users\""
               
+  # アラートポリシー定義
   alertPolicies:
-    - displayName: "High Latency Alert"
+    - displayName: "High Latency Alert (Critical)"
+      documentation:
+        content: |
+          ## High Latency Alert
+          
+          This alert fires when the p99 latency exceeds 1000ms for any API endpoint.
+          
+          ### Troubleshooting Steps:
+          
+          1. Check for recent deployments
+          2. Verify database performance
+          3. Check external service dependencies
+          4. Scale up instance count if necessary
+          
+          **Contact:** ops-team@example.com
+        mimeType: "text/markdown"
       conditions:
-        - displayName: "Latency Above Threshold"
+        - displayName: "API Latency Above Critical Threshold"
           conditionThreshold:
             filter: "metric.type = \"custom.googleapis.com/api_latency\""
             aggregations:
               - alignmentPeriod: 60s
                 perSeriesAligner: ALIGN_PERCENTILE_99
+                crossSeriesReducer: REDUCE_MEAN
             comparison: COMPARISON_GT
             thresholdValue: 1000
             duration: 300s
+            trigger:
+              count: 1
       combiner: OR
+      severity: CRITICAL
       notificationChannels:
         - type: "email"
           labels:
             email_address: "${ALERT_EMAIL}"
+        - type: "slack"
+          labels:
+            channel_name: "#alerts-critical"
+          sensitiveLabels:
+            auth_token: "${SLACK_TOKEN}"
+        - type: "pagerduty"
+          labels:
+            service_key: "${PAGERDUTY_SERVICE_KEY}"
+    
+    - displayName: "High Error Rate Alert"
+      conditions:
+        - displayName: "Error Rate Above Threshold"
+          conditionThreshold:
+            filter: "metric.type = \"logging.googleapis.com/user/error_count\""
+            aggregations:
+              - alignmentPeriod: 60s
+                perSeriesAligner: ALIGN_RATE
+                crossSeriesReducer: REDUCE_SUM
+            comparison: COMPARISON_GT
+            thresholdValue: 5  # エラー/分
+            duration: 300s
+      combiner: OR
+      severity: WARNING
+      notificationChannels:
+        - type: "email"
+          labels:
+            email_address: "${ALERT_EMAIL}"
+        - type: "slack"
+          labels:
+            channel_name: "#alerts-warning" 
+    
+    - displayName: "Low Active Users Alert"
+      conditions:
+        - displayName: "Active Users Below Threshold"
+          conditionThreshold:
+            filter: "metric.type = \"custom.googleapis.com/active_users\""
+            aggregations:
+              - alignmentPeriod: 300s
+                perSeriesAligner: ALIGN_MEAN
+            comparison: COMPARISON_LT
+            thresholdValue: 10  # 最小アクティブユーザー数
+            duration: 900s  # 15分間閾値以下で発報
+      combiner: OR
+      severity: WARNING
+      notificationChannels:
+        - type: "email"
+          labels:
+            email_address: "${SUPPORT_EMAIL}"
+  
+  # 通知チャネル設定
+  notificationChannels:
+    - displayName: "Operations Team Email"
+      type: "email"
+      labels:
+        email_address: "${ALERT_EMAIL}"
+      userLabels:
+        team: "operations"
+        environment: "prod"
+    
+    - displayName: "Critical Alerts Slack Channel"
+      type: "slack"
+      labels:
+        channel_name: "#alerts-critical"
+      sensitiveLabels:
+        auth_token: "${SLACK_TOKEN}"
+      userLabels:
+        team: "operations"
+        environment: "prod"
+        severity: "critical"
+    
+    - displayName: "Warning Alerts Slack Channel"
+      type: "slack"
+      labels:
+        channel_name: "#alerts-warning"
+      sensitiveLabels:
+        auth_token: "${SLACK_TOKEN}"
+      userLabels:
+        team: "operations"
+        environment: "prod"
+        severity: "warning"
+    
+    - displayName: "PagerDuty On-Call"
+      type: "pagerduty"
+      labels:
+        service_key: "${PAGERDUTY_SERVICE_KEY}"
+      userLabels:
+        team: "operations"
+        environment: "prod"
+        severity: "critical"
