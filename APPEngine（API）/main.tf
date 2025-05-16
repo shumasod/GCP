@@ -1,4 +1,3 @@
-# main.tf
 terraform {
   required_providers {
     google = {
@@ -6,30 +5,36 @@ terraform {
       version = "~> 4.0"
     }
   }
+  # リモート状態管理のためのバックエンド設定を検討
+  # backend "gcs" {
+  #   bucket = "terraform-state-bucket"
+  #   prefix = "monitoring-state"
+  # }
 }
 
 provider "google" {
   project = var.project_id
   region  = var.region
+  zone    = var.zone
 }
 
-# モニタリングワークスペースの設定
-resource "google_monitoring_workspace" "workspace" {
-  name = "${var.project_id}-workspace"
-}
-
-# アップタイムチェックの設定
+# アップタイムチェックの設定 - 詳細設定の追加
 resource "google_monitoring_uptime_check_config" "http_check" {
-  display_name = "http-uptime-check"
+  display_name = "${var.app_name} HTTP稼働確認"
   timeout      = "10s"
-
+  period       = "60s"  # チェック頻度
+  
   http_check {
-    path         = "/health"
-    port         = "443"
-    use_ssl      = true
-    validate_ssl = true
+    path           = var.health_check_path
+    port           = "443"
+    use_ssl        = true
+    validate_ssl   = true
+    request_method = "GET"
+    headers = {
+      "Content-Type" = "application/json"
+    }
   }
-
+  
   monitored_resource {
     type = "uptime_url"
     labels = {
@@ -37,44 +42,17 @@ resource "google_monitoring_uptime_check_config" "http_check" {
       host       = var.app_domain
     }
   }
-}
-
-# アラートポリシーの設定
-resource "google_monitoring_alert_policy" "alert_policy" {
-  display_name = "High Error Rate Alert"
-  combiner     = "OR"
-  conditions {
-    display_name = "error-rate-condition"
-    condition_threshold {
-      filter          = "metric.type=\"logging.googleapis.com/user/${var.error_metric_name}\" resource.type=\"gae_app\""
-      duration        = "300s"
-      comparison     = "COMPARISON_GT"
-      threshold_value = 5
-      trigger {
-        count = 1
-      }
-      aggregations {
-        alignment_period   = "60s"
-        per_series_aligner = "ALIGN_RATE"
-      }
-    }
+  
+  content_matchers {
+    content = "OK"
+    matcher = "CONTAINS_STRING"
   }
-
-  notification_channels = [google_monitoring_notification_channel.email.name]
-}
-
-# 通知チャネルの設定
-resource "google_monitoring_notification_channel" "email" {
-  display_name = "Email Channel"
-  type         = "email"
-  labels = {
-    email_address = var.alert_email
+  
+  # リソース管理のためのラベル追加
+  user_labels = {
+    environment = var.environment
+    service     = var.app_name
   }
 }
 
-# ダッシュボードの設定
-resource "google_monitoring_dashboard" "dashboard" {
-  dashboard_json = templatefile("${path.module}/dashboard.json", {
-    project_id = var.project_id
-  })
-}
+#
