@@ -1,170 +1,242 @@
 # GCP AppEngine アプリケーション移行ガイド
 
-## 用途
-既存のAppEngineアプリケーションを新しいGCPプロジェクトへ移行する際の手順書
+## 1. 概要
+既存のAppEngineアプリケーションを新しいGCPプロジェクトへ安全に移行するための完全ガイド
 
-## 必要な準備
-- GCloud SDK
-- Git
-- 適切なIAM権限
-- 移行元プロジェクトのソースコード
+## 2. 前提条件
+- [ ] GCPアカウントと適切なIAM権限
+- [ ] Google Cloud SDK（gcloudコマンド）のインストール
+- [ ] Git（ソースコード管理を使用する場合）
+- [ ] 移行元プロジェクトへのアクセス権限
+- [ ] 移行先プロジェクトの作成権限
 
-## 移行手順
+## 3. 移行前準備
 
-### 1. アプリケーション準備
+### 3.1 現在の環境の確認
 ```bash
-# ソースコード取得
-git clone https://github.com/your-repo/app.git && cd app
-
-# 新規プロジェクト作成
-gcloud app create --region=asia-northeast1 --project=new-project-id
+# 移行元プロジェクトの情報取得
+gcloud config set project old-project-id
+gcloud app describe
+gcloud app services list
+gcloud app versions list
 ```
 
-### 2. デプロイと設定
+### 3.2 データバックアップ
 ```bash
-# アプリケーションのデプロイ
-gcloud app deploy --project=new-project-id
-
-# サービスアカウント設定
-gcloud iam service-accounts create app-sa \
-    --display-name="AppEngine SA" \
-    --project=new-project-id
-```
-
-### 3. データ移行（必要な場合）
-```bash
-# Datastore データ移行
+# Datastore バックアップ
 gcloud datastore export \
-    --kinds=YourKind \
     --project=old-project-id \
-    gs://bucket/export/
+    --destination-format=json \
+    gs://backup-bucket/backup-$(date +%Y%m%d)/
 
-gcloud datastore import \
-    --kinds=YourKind \
-    --project=new-project-id \
-    gs://bucket/export/
+# Storage バックアップ（必要に応じて）
+gsutil -m cp -r gs://old-bucket/* gs://backup-bucket/storage-backup/
 ```
 
-## 確認事項
-- [ ] 環境変数の更新
-- [ ] APIキーの設定
-- [ ] Firebaseの再連携
-- [ ] カスタムドメインの設定
+## 4. 移行手順
 
-## トラブルシューティング
-```bash
-# ログ確認
-gcloud app logs tail --project=new-project-id
-
-# サービス状態確認
-gcloud app services list --project=new-project-id
-```
-
-## 注意点
-- デプロイ前に`app.yaml`の確認
-- 移行前のデータバックアップ
-- 新環境でのテスト実施
-
-
-このケースは以下のようなシナリオを想定しています：
-
-1. 既存のAppEngineアプリケーションがあり、新しいGCPプロジェクトへ移行が必要な場合
-2. 以下のような状況での使用：
-   - プロジェクトの再編成
-   - 開発環境から本番環境への移行
-   - 組織変更に伴うプロジェクト移行
-   - リソース最適化のための環境統合
-
-修正のポイント：
-1. チェックリスト形式の採用
-2. 重要コマンドの厳選
-3. 手順の簡略化と明確化
-4. トラブルシューティングセクションの追加
-
-必要に応じて、さらなる具体的なユースケースや手順の詳細化も可能です。ご要望がありましたらお知らせください。
-## 概要
-このガイドでは、既存のAppEngineアプリケーションを新しいGCPプロジェクトへ移行する手順を説明します。
-
-## 前提条件
-- GCPアカウントと適切な権限
-- Google Cloud SDK（gcloudコマンド）のインストール
-- Git（ソースコード管理を使用する場合）
-
-## 手順
-
-### 1. ソースコードの取得
+### 4.1 ソースコードの準備
 ```bash
 # プロジェクトディレクトリの作成
 mkdir migration-project && cd migration-project
 
-# Gitリポジトリからソースコードを取得
+# ソースコードの取得
 git clone https://github.com/your-repo/existing-app.git
+cd existing-app
 ```
 
-### 2. 新規プロジェクトのセットアップ
+### 4.2 新規プロジェクトのセットアップ
 ```bash
 # プロジェクトの切り替え
 gcloud config set project new-project-id
 
 # AppEngineアプリケーションの作成
 gcloud app create --region=asia-northeast1
+
+# 必要なAPIの有効化
+gcloud services enable appengine.googleapis.com
+gcloud services enable datastore.googleapis.com
 ```
 
-### 3. アプリケーションのデプロイ
+### 4.3 設定ファイルの更新
 ```bash
-cd existing-app
-
-# app.yamlの確認と必要に応じた修正
-# デプロイの実行
-gcloud app deploy --project=new-project-id --quiet
+# app.yamlの環境変数を新プロジェクト用に更新
+# 例:
+# env_variables:
+#   PROJECT_ID: "new-project-id"
+#   DATABASE_URL: "new-database-url"
 ```
 
-### 4. データの移行
-#### Cloud Datastoreの場合
-```bash
-# データのエクスポート
-gcloud datastore export \
-  --kinds=YourKind \
-  --project=old-project-id \
-  --destination-format=json \
-  gs://your-bucket/export/
-
-# データのインポート
-gcloud datastore import \
-  --kinds=YourKind \
-  --project=new-project-id \
-  gs://your-bucket/export/
-```
-
-### 5. 認証設定
-1. サービスアカウントの設定
+### 4.4 サービスアカウントの設定
 ```bash
 # サービスアカウントの作成
 gcloud iam service-accounts create app-engine-sa \
-  --display-name="AppEngine Service Account"
+    --display-name="AppEngine Service Account" \
+    --project=new-project-id
 
 # 必要な権限の付与
 gcloud projects add-iam-policy-binding new-project-id \
-  --member="serviceAccount:app-engine-sa@new-project-id.iam.gserviceaccount.com" \
-  --role="roles/datastore.user"
+    --member="serviceAccount:app-engine-sa@new-project-id.iam.gserviceaccount.com" \
+    --role="roles/datastore.user"
+
+gcloud projects add-iam-policy-binding new-project-id \
+    --member="serviceAccount:app-engine-sa@new-project-id.iam.gserviceaccount.com" \
+    --role="roles/storage.objectViewer"
 ```
 
-2. 環境変数の設定
+### 4.5 データの移行
 ```bash
-# サービスアカウントキーの作成
-gcloud iam service-accounts keys create key.json \
-  --iam-account=app-engine-sa@new-project-id.iam.gserviceaccount.com
+# Datastore データの移行
+gcloud datastore export \
+    --kinds=YourKind \
+    --project=old-project-id \
+    --destination-format=json \
+    gs://migration-bucket/export/
 
-# AppEngineへの環境変数設定
-gcloud app deploy app.yaml --quiet
+gcloud datastore import \
+    --kinds=YourKind \
+    --project=new-project-id \
+    gs://migration-bucket/export/
+
+# インデックスの移行
+gcloud datastore indexes create index.yaml --project=new-project-id
 ```
 
-## 注意点
-- データ移行前にバックアップを必ず作成すること
-- 環境変数やAPIキーの更新を忘れずに行うこと
-- 新環境でのテストを十分に実施すること
+### 4.6 アプリケーションのデプロイ
+```bash
+# テストデプロイ（本番トラフィックを受けない）
+gcloud app deploy --project=new-project-id --no-promote --version=test
 
-## トラブルシューティング
-- デプロイエラーの場合: ログを確認（`gcloud app logs tail`）
-- 権限エラーの場合: IAM設定を確認
-- データ移行エラーの場合: バケットの権限を確認
+# 検証後、本番デプロイ
+gcloud app deploy --project=new-project-id --promote
+```
+
+## 5. 検証とテスト
+
+### 5.1 デプロイ確認
+```bash
+# サービス状態確認
+gcloud app services list --project=new-project-id
+gcloud app versions list --project=new-project-id
+
+# アプリケーションの動作確認
+curl -I https://new-project-id.appspot.com/
+```
+
+### 5.2 データ整合性確認
+```bash
+# データ件数の確認
+gcloud datastore export \
+    --kinds=YourKind \
+    --project=new-project-id \
+    --destination-format=json \
+    gs://verification-bucket/verification/
+
+# 移行前後のデータ比較
+```
+
+### 5.3 機能テスト
+- [ ] 主要機能の動作確認
+- [ ] 認証・認可の確認
+- [ ] 外部API連携の確認
+- [ ] パフォーマンステスト
+
+## 6. トラブルシューティング
+
+### 6.1 デプロイエラー
+```bash
+# ログ確認
+gcloud app logs tail --project=new-project-id
+
+# 詳細なログ確認
+gcloud app logs read --project=new-project-id --limit=100
+```
+
+### 6.2 権限エラー
+```bash
+# IAM設定確認
+gcloud projects get-iam-policy new-project-id
+
+# サービスアカウント確認
+gcloud iam service-accounts list --project=new-project-id
+```
+
+### 6.3 データ移行エラー
+```bash
+# データストア操作権限確認
+gcloud projects add-iam-policy-binding new-project-id \
+    --member="user:your-email@example.com" \
+    --role="roles/datastore.owner"
+
+# バケット権限確認
+gsutil iam get gs://migration-bucket
+```
+
+## 7. ロールバック手順
+
+### 7.1 緊急時のロールバック
+```bash
+# 旧バージョンへの即座の切り替え
+gcloud app services set-traffic default --splits=old-version=1.0 \
+    --project=old-project-id
+
+# DNS設定の復元（カスタムドメイン使用時）
+```
+
+### 7.2 データの復元
+```bash
+# バックアップからのデータ復元
+gcloud datastore import \
+    --kinds=YourKind \
+    --project=old-project-id \
+    gs://backup-bucket/backup-YYYYMMDD/
+```
+
+## 8. 移行後の設定
+
+### 8.1 カスタムドメインの設定
+```bash
+# ドメインマッピングの作成
+gcloud app domain-mappings create your-domain.com \
+    --project=new-project-id
+```
+
+### 8.2 SSL証明書の設定
+```bash
+# SSL証明書の確認
+gcloud app ssl-certificates list --project=new-project-id
+```
+
+### 8.3 監視とアラートの設定
+```bash
+# Cloud Monitoring の設定
+gcloud alpha monitoring policies create --policy-from-file=monitoring-policy.yaml
+```
+
+## 9. 注意事項
+
+- **データ移行前には必ずバックアップを作成すること**
+- **環境変数やAPIキーの更新を忘れずに行うこと**
+- **新環境でのテストを十分に実施すること**
+- **移行中はサービスの停止時間を最小化すること**
+- **ロールバック手順を事前に確認しておくこと**
+
+## 10. チェックリスト
+
+### 移行前
+- [ ] 現在の環境の完全バックアップ
+- [ ] 移行計画の策定
+- [ ] 関係者への事前通知
+- [ ] 移行リハーサルの実施
+
+### 移行中
+- [ ] 各手順の完了確認
+- [ ] エラーログの監視
+- [ ] データ整合性の確認
+- [ ] 機能テストの実施
+
+### 移行後
+- [ ] 本番環境での動作確認
+- [ ] 監視設定の確認
+- [ ] 旧環境のクリーンアップ
+- [ ] 移行報告書の作成
